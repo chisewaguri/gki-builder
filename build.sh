@@ -201,10 +201,6 @@ if [[ $USE_KSU_MANUAL_HOOK == "true" ]]; then
 
         fi
     fi
-    if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
-        log "CONFIG_KSU_MANUAL_HOOK found..."
-        patch -p1 --forward "$chise_patches/melt-xxksu.patch" || true
-    fi
 fi
 
 # Install KernelSU driver
@@ -272,6 +268,12 @@ fi
 # Set localversion to the KERNEL_NAME variable
 config --file $DEFCONFIG_FILE \
     --set-str LOCALVERSION "-$KERNEL_NAME"
+
+if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
+    log "CONFIG_KSU_MANUAL_HOOK found..."
+    cd $workdir/KernelSU
+    patch -p1 "$workdir/chise_patches/melt-xxksu.patch" || true
+fi
 
 text=$(
     cat <<EOF
