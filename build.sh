@@ -257,6 +257,15 @@ elif [[ -n $KSU && $USE_KSU_SUSFS == "true" ]]; then
 fi
 
 cd $workdir/common
+
+# KernelSU Manual Hook Melt
+if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
+    log "CONFIG_KSU_MANUAL_HOOK found..."
+    log "Patching Kconfig..."
+    [ ! -f "$workdir/chise_patches/melt-xxksu.patch" ] && error "patch wrong shit"
+    patch -p1 "$workdir"/chise_patches/melt-xxksu.patch || exit 1
+fi
+
 # Remove unnecessary code from scripts/setlocalversion
 if grep -q '[-]dirty' scripts/setlocalversion; then
     sed -i 's/-dirty//' scripts/setlocalversion
@@ -268,13 +277,6 @@ fi
 # Set localversion to the KERNEL_NAME variable
 config --file $DEFCONFIG_FILE \
     --set-str LOCALVERSION "-$KERNEL_NAME"
-
-if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
-    log "CONFIG_KSU_MANUAL_HOOK found..."
-    log "Patching Kconfig..."
-    cd "$workdir/KernelSU" || exit 1
-    patch -p1 "$workdir"/chise_patches/melt-xxksu.patch || exit 1
-fi
 
 text=$(
     cat <<EOF
