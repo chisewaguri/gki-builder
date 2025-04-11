@@ -271,8 +271,9 @@ config --file $DEFCONFIG_FILE \
 
 if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
     log "CONFIG_KSU_MANUAL_HOOK found..."
-    cd $workdir/KernelSU
-    patch -p1 "$workdir/chise_patches/melt-xxksu.patch" || true
+    log "Patching Kconfig..."
+    cd "$workdir/KernelSU" || exit 1
+    patch -p1 "$workdir"/chise_patches/melt-xxksu.patch || exit 1
 fi
 
 text=$(
