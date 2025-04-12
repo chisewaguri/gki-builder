@@ -103,13 +103,15 @@ if [[ ! -x $CLANG_PATH/bin/clang || ! -f $CLANG_PATH/VERSION || "$(cat $CLANG_PA
         wget -qO clang-tarball "$CLANG_URL" || error "Failed to download Clang."
         tar -xf clang-tarball -C "$CLANG_PATH/" || error "Failed to extract Clang."
         rm -f clang-tarball
-        while [ "$(find "$CLANG_PATH" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]; do
-            single_dir=$(find "$CLANG_PATH" -mindepth 1 -maxdepth 1 -type d)
-            mv "$single_dir"/* "$CLANG_PATH"/
-            rmdir "$single_dir"
-        done
     else
         git clone -q --depth=1 -b "$CUSTOM_CLANG_BRANCH" "$CLANG_URL" "$CLANG_PATH" || error "Clang download failed."
+    fi
+
+    if [[ $(find "$CLANG_PATH" -mindepth 1 -maxdepth 1 -type d | wc -l) -eq 1 ]] &&
+        [[ $(find "$CLANG_PATH" -mindepth 1 -maxdepth 1 -type f | wc -l) -eq 0 ]]; then
+        single_dir=$(find "$CLANG_PATH" -mindepth 1 -maxdepth 1 -type d)
+        mv "$single_dir"/* "$CLANG_PATH"/
+        rm -rf "$single_dir"
     fi
 
     echo "$CLANG_INFO" >"$CLANG_PATH/VERSION"
