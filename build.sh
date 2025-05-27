@@ -158,8 +158,11 @@ log "Applying extra tmpfs config..."
 config --file $DEFCONFIG_FILE --enable CONFIG_TMPFS_XATTR
 config --file $DEFCONFIG_FILE --enable CONFIG_TMPFS_POSIX_ACL
 
-## KernelSU setup
+
+## --- KernelSU setup ---
+
 # Remove KernelSU in driver in kernel source if exist
+# Ensure consistency
 cd "$workdir/common" || exit 1
 
 if [[ $KSU != "None" ]]; then
@@ -185,7 +188,7 @@ if [[ $KSU != "None" ]]; then
     "Official") install_ksu tiann/KernelSU ;;
     "Rissu") install_ksu rsuntk/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo susfs-v1.5.5 || echo main) ;;
     "Next") install_ksu rifsxd/KernelSU-Next $([[ $USE_KSU_SUSFS == true ]] && echo next-susfs || echo next) ;;
-    "xx") install_ksu backslashxx/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo 12074+sus155 || echo magic) ;;
+    "xx") install_ksu backslashxx/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo 12103+155 || echo magic) ;;
     *) error "Invalid KSU value: $KSU" ;;
     esac
 fi
