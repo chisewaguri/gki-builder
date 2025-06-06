@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Kernel name
-KERNEL_NAME="Melt-Chise-3.9+"
+KERNEL_NAME="los-22.2-060fed1"
 
 # GKI Version
 GKI_VERSION="android12-5.10"
@@ -17,9 +17,9 @@ ANYKERNEL_REPO="https://github.com/hazepynut/anykernel"
 ANYKERNEL_BRANCH="gki"
 
 # Kernel
-KERNEL_REPO="https://github.com/pzqqt/android_kernel_xiaomi_marble"
-KERNEL_BRANCH="melt-rebase"
-KERNEL_DEFCONFIG="marble_defconfig"
+KERNEL_REPO="https://github.com/cupid-development/android_kernel_xiaomi_sm8450"
+KERNEL_BRANCH="lineage-22.2"
+KERNEL_DEFCONFIG="gki_defconfig"
 DEFCONFIG_FILE="$workdir/common/arch/arm64/configs/$KERNEL_DEFCONFIG"
 
 # Defconfigs would be merged in the compiling processes
@@ -28,6 +28,10 @@ vendor/xiaomi.config
 vendor/gold.config
 "
 DEFCONFIGS="
+vendor/waipio_GKI.config
+vendor/xiaomi_GKI.config
+vendor/debugfs.config
+vendor/marble_GKI.config
 " # Leave this empty if you don't need to merge any configs
 
 # Releases repository
