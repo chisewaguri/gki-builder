@@ -298,6 +298,8 @@ fi
 config --file $DEFCONFIG_FILE \
     --set-str LOCALVERSION "-$KERNEL_NAME"
 
+[[ $KSU == "Suki" ]] && config --file $DEFCONFIG_FILE --enable CONFIG_KPM
+
 text=$(
     cat <<EOF
 *~~~ $KERNEL_NAME CI ~~~*
