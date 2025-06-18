@@ -264,8 +264,6 @@ elif [[ -n $KSU && $USE_KSU_SUSFS == "true" ]]; then
         grep -q "*FAILED*fs/devpts/inode.c*" ./patch.log || error "❌ Patch failed (not due to legacy KSU manual hook)."
         log "⚠️ Kernel susfs patch failed on fs/devpts/inode.c."
         if [[ $USE_KSU_MANUAL_HOOK != "true" ]]; then
-            # WIP. this will be uncommented later... or never...
-            # patch -p1 /path/to/devpts_fix.patch || error "Fix patch failed."
             error "❌ Your kernel-source is using manual hook but you dont enable it, sus_su would not work. exiting..."
         fi
 
