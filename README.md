@@ -1,6 +1,6 @@
 # Build Android GKI with GitHub Actions  
 
-[![CodeFactor](https://www.codefactor.io/repository/github/hazepynut/gki-builder/badge)](https://www.codefactor.io/repository/github/hazepynut/gki-builder)  
+[![CodeFactor](https://www.codefactor.io/repository/github/chisewaguri/gki-builder/badge)](https://www.codefactor.io/repository/github/chisewaguri/gki-builder)  
 
 This repository provides an automated workflow to build the **Android Generic Kernel Image (GKI)** using **GitHub Actions**.  
 With this setup, you can compile the GKI kernel directly in GitHub’s cloud environment without requiring a powerful local machine.  
@@ -35,7 +35,7 @@ Once configured, you can start building!
 | GKI Version | Support |
 |-------------|---------|
 | **5.10**    | ✅ Yes  |
-| **>5.10**   | ❌ No   |
+| **>5.10**   | ❌ Idk  |
 
 ## 📜 License  
 
