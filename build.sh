@@ -195,6 +195,50 @@ if [[ $KSU != "None" ]]; then
     esac
 fi
 
+
+# SUSFS setup
+if [[ $USE_KSU_SUSFS == "true" && -z $KSU ]]; then
+    error "You can't use SuSFS without KernelSU!"
+elif [[ -n $KSU && $USE_KSU_SUSFS == "true" ]]; then
+    cd $workdir
+
+    # clone susfs source
+    log "Cloning susfs4ksu..."
+    git clone -q https://gitlab.com/simonpunk/susfs4ksu -b gki-$GKI_VERSION $workdir/susfs4ksu
+    # checkout 155-250210 on xx's ksu
+    # gki 12-5.10, change it on other version of gki.
+    [[ $KSU == "Legacy" ]] && cd susfs4ksu && git checkout 171bac640ba1e9f3dbf744ea65adec6e90adbaf9
+    SUSFS_PATCHES="$workdir/susfs4ksu/kernel_patches"
+
+    # Copy susfs files (Kernel Side)
+    log "Copying susfs files..."
+    cd $workdir/common
+    cp $SUSFS_PATCHES/include/linux/* ./include/linux/
+    cp $SUSFS_PATCHES/fs/* ./fs/
+    SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | sed 's/"//g')
+
+    # Apply kernel-side susfs patch
+    log "Patching kernel-side susfs patch"
+    if ! patch -p1 <"$SUSFS_PATCHES/50_add_susfs_in_gki-$GKI_VERSION.patch" 2>&1 | tee ./patch.log; then
+        grep -q "*FAILED*fs/devpts/inode.c*" ./patch.log || error "❌ Patch failed (not due to legacy KSU manual hook)."
+        log "⚠️ Kernel susfs patch failed on fs/devpts/inode.c."
+        if [[ $USE_KSU_MANUAL_HOOK != "true" ]]; then
+            error "❌ Your kernel-source is using manual hook but you dont enable it, sus_su would not work. exiting..."
+        fi
+
+        log "⏩ Using manual hook, skipping patch."
+        mv -f fs/devpts/inode.c.orig fs/devpts/inode.c
+    fi
+    rm -f ./patch.log
+
+    # Apply patch to KernelSU (KSU Side)
+    if [[ $KSU == "Official" ]]; then
+        cd ../KernelSU
+        log "Applying KernelSU-side susfs patch"
+        patch -p1 <$SUSFS_PATCHES/KernelSU/10_enable_susfs_for_ksu.patch || error "KernelSU-side susfs patch failed."
+    fi
+fi
+
 # Apply config for KernelSU manual hook (Requires supported KernelSU)
 if [[ $USE_KSU_MANUAL_HOOK == "true" ]]; then
     cd $workdir/common
@@ -237,49 +281,6 @@ if [[ $USE_KSU_MANUAL_HOOK == "true" ]]; then
             config --file $DEFCONFIG_FILE --enable CONFIG_KSU_SUSFS_SUS_SU
 
         fi
-    fi
-
-    cd $workdir
-fi
-
-
-# SUSFS for KSU setup
-if [[ $USE_KSU_SUSFS == "true" && -z $KSU ]]; then
-    error "You can't use SuSFS without KernelSU!"
-elif [[ -n $KSU && $USE_KSU_SUSFS == "true" ]]; then
-    log "Cloning susfs4ksu..."
-    git clone -q https://gitlab.com/simonpunk/susfs4ksu -b gki-$GKI_VERSION $workdir/susfs4ksu
-    # checkout 155-250210 on xx's ksu
-    # gki 12-5.10, change it on other version of gki.
-    [[ $KSU == "Legacy" ]] && cd susfs4ksu && git checkout 171bac640ba1e9f3dbf744ea65adec6e90adbaf9
-    SUSFS_PATCHES="$workdir/susfs4ksu/kernel_patches"
-
-    # Copy susfs files (Kernel Side)
-    log "Copying susfs files..."
-    cd $workdir/common
-    cp $SUSFS_PATCHES/include/linux/* ./include/linux/
-    cp $SUSFS_PATCHES/fs/* ./fs/
-    SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | sed 's/"//g')
-
-    # Apply kernel-side susfs patch
-    log "Patching kernel-side susfs patch"
-    if ! patch -p1 <"$SUSFS_PATCHES/50_add_susfs_in_gki-$GKI_VERSION.patch" 2>&1 | tee ./patch.log; then
-        grep -q "*FAILED*fs/devpts/inode.c*" ./patch.log || error "❌ Patch failed (not due to legacy KSU manual hook)."
-        log "⚠️ Kernel susfs patch failed on fs/devpts/inode.c."
-        if [[ $USE_KSU_MANUAL_HOOK != "true" ]]; then
-            error "❌ Your kernel-source is using manual hook but you dont enable it, sus_su would not work. exiting..."
-        fi
-
-        log "⏩ Using manual hook, skipping patch."
-        mv -f fs/devpts/inode.c.orig fs/devpts/inode.c
-    fi
-    rm -f ./patch.log
-
-    # Apply patch to KernelSU (KSU Side)
-    if [[ $KSU == "Official" ]]; then
-        cd ../KernelSU
-        log "Applying KernelSU-side susfs patch"
-        patch -p1 <$SUSFS_PATCHES/KernelSU/10_enable_susfs_for_ksu.patch || error "KernelSU-side susfs patch failed."
     fi
 fi
 
