@@ -49,7 +49,8 @@ declare -A KSU_VARIANTS=(
     ["Official"]="KSU"
     ["Rissu"]="RKSU"
     ["Next"]="KSUN"
-    ["xx"]="XXKSU"
+    ["Legacy"]="LegacyKSU"
+    ["Suki"]="SukiSU"
 )
 
 VARIANT="${KSU_VARIANTS[$KSU]:-none}"
@@ -188,7 +189,8 @@ if [[ $KSU != "None" ]]; then
     "Official") install_ksu tiann/KernelSU ;;
     "Rissu") install_ksu rsuntk/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo susfs-v1.5.5 || echo main) ;;
     "Next") install_ksu rifsxd/KernelSU-Next $([[ $USE_KSU_SUSFS == true ]] && echo next-susfs || echo next) ;;
-    "xx") install_ksu backslashxx/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo 12103+155 || echo magic) ;;
+    "Legacy") install_ksu backslashxx/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo 12103+155 || echo magic) ;;
+    "Suki") install_ksu SukiSU-Ultra/SukiSU-Ultra $([[ $USE_KSU_SUSFS == true ]] && echo susfs-main || echo main) ;;
     *) error "Invalid KSU value: $KSU" ;;
     esac
 fi
@@ -197,7 +199,7 @@ fi
 if [[ $USE_KSU_MANUAL_HOOK == "true" ]]; then
     cd $workdir/common
 
-    # manual hook config for melt
+    # manual hook config for kernel that use this config
     if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
         sed -i "/^endmenu/i\\
         config KSU_MANUAL_HOOK\\

@@ -31,7 +31,7 @@ on:
           - "defconfig"
 
       KernelSU:
-        description: KernelSU Variant
+        description: KernelSU variant
         default: ''
         type: choice
         options:
@@ -39,7 +39,8 @@ on:
           - "Official"
           - "Next"
           - "Rissu"
-          - "xx"
+          - "Legacy"
+          - "Suki"
 
       SUSFS4KSU:
         description: SUSFS (KSU Needed)
