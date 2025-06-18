@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Kernel name
-KERNEL_NAME="QuartiX-v2"
+KERNEL_NAME="Glow-Chise-v3.9+"
 
 # GKI Version
 GKI_VERSION="android12-5.10"
@@ -17,9 +17,9 @@ ANYKERNEL_REPO="https://github.com/hazepynut/anykernel"
 ANYKERNEL_BRANCH="gki"
 
 # Kernel
-KERNEL_REPO="https://github.com/hazepynut/kernel_new"
-KERNEL_BRANCH="android12-5.10"
-KERNEL_DEFCONFIG="gki_defconfig"
+KERNEL_REPO="https://github.com/pzqqt/android_kernel_xiaomi_marble"
+KERNEL_BRANCH="Melt-marble-v3.9"
+KERNEL_DEFCONFIG="marble_defconfig"
 DEFCONFIG_FILE="$workdir/common/arch/arm64/configs/$KERNEL_DEFCONFIG"
 
 # Defconfigs would be merged in the compiling processes
@@ -34,11 +34,11 @@ DEFCONFIGS="
 GKI_RELEASES_REPO="https://github.com/hazepynut/quartix-releases"
 
 # AOSP Clang
-USE_AOSP_CLANG="false"
+USE_AOSP_CLANG="true"
 AOSP_CLANG_SOURCE="r547379" # Should be version number or direct link to clang tarball
 
 # Custom clang
-USE_CUSTOM_CLANG="true"
+USE_CUSTOM_CLANG="false"
 CUSTOM_CLANG_SOURCE="https://github.com/Rv-Project/RvClang/releases/download/20.1.0/RvClang-20.1.0-bolt-pgo-full_lto.tar.gz"
 CUSTOM_CLANG_BRANCH=""
 
