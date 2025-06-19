@@ -189,7 +189,7 @@ if [[ $KSU != "None" ]]; then
     "Official") install_ksu tiann/KernelSU ;;
     "Rissu") install_ksu rsuntk/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo susfs-v1.5.5 || echo main) ;;
     "Next") install_ksu rifsxd/KernelSU-Next $([[ $USE_KSU_SUSFS == true ]] && echo next-susfs || echo next) ;;
-    "Legacy") install_ksu backslashxx/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo 12103+155 || echo magic) ;;
+    "Legacy") install_ksu backslashxx/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo 12103+155+1 || echo magic) ;;
     "Suki") install_ksu SukiSU-Ultra/SukiSU-Ultra $([[ $USE_KSU_SUSFS == true ]] && echo susfs-main || echo main) ;;
     *) error "Invalid KSU value: $KSU" ;;
     esac
