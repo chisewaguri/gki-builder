@@ -18,7 +18,7 @@ ANYKERNEL_BRANCH="gki"
 
 # Kernel
 KERNEL_REPO="https://github.com/pzqqt/android_kernel_xiaomi_marble"
-KERNEL_BRANCH="Melt-marble-v3.9"
+KERNEL_BRANCH="melt-rebase"
 KERNEL_DEFCONFIG="marble_defconfig"
 DEFCONFIG_FILE="$workdir/common/arch/arm64/configs/$KERNEL_DEFCONFIG"
 
