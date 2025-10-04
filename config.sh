@@ -28,7 +28,12 @@ vendor/xiaomi.config
 vendor/gold.config
 "
 DEFCONFIGS="
+
 " # Leave this empty if you don't need to merge any configs
+
+# -- KernelSU-related config --
+# revert susfs to specified commit
+SUSFS_COMMIT="" # empty to use the latest
 
 # Releases repository
 GKI_RELEASES_REPO="https://github.com/hazepynut/quartix-releases"

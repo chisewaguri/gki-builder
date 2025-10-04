@@ -34,38 +34,46 @@ send_msg() {
 # KernelSU installation function
 install_ksu() {
     local repo="$1"
-    local ref="$2" # Can be a branch or a tag
+    local ref="$2"  # Can be a branch or a tag
 
-    [[ -z $repo ]] && {
+    if [[ -z "$repo" ]]; then
         echo "Usage: install_ksu <repo-username/ksu-repo-name> [branch-or-tag]"
         return 1
-    }
+    fi
 
-    # Fetch the latest tag (always needed for KSU_VERSION)
-    local latest_tag=$(gh api repos/$repo/tags --jq '.[0].name')
+    # Fetch the latest tag (needed for KSU_VERSION)
+    local latest_tag
+    if ! latest_tag=$(gh api "repos/$repo/tags" --jq '.[0].name' 2>/dev/null); then
+        echo "Error: Unable to fetch tags from repo $repo"
+        return 1
+    fi
 
-    # Determine whether the reference is a branch or tag
-    local ref_type="tags" # Default to tag
-    if [[ -n $ref ]]; then
+    local ref_type="tags"  # Default reference type
+
+    if [[ -n "$ref" ]]; then
         # Check if the provided ref is a branch
-        if gh api repos/$repo/branches --jq '.[].name' | grep -q "^$ref$"; then
+        if gh api "repos/$repo/branches" --jq '.[].name' 2>/dev/null | grep -qx "$ref"; then
             ref_type="heads"
         fi
     else
-        ref="$latest_tag" # Default to latest tag
+        ref="$latest_tag"  # Default to latest tag
     fi
 
-    # Construct the correct raw GitHub URL
     local url="https://raw.githubusercontent.com/$repo/refs/$ref_type/$ref/kernel/setup.sh"
 
     log "Installing KernelSU from $repo ($ref)..."
-    curl -LSs "$url" | bash -s "$ref"
 
-    # Always set KSU_VERSION to the latest tag
+    if ! curl -LSs "$url" | bash -s -- "$ref"; then
+        echo "Error: Failed to download or run setup script from $url"
+        return 1
+    fi
+
+    # Update version globally or export as needed
     KSU_VERSION="$latest_tag"
 }
 
-# Kernel scripts function
+# Config script
+# Should be there on GKI (not sure if they behave the same like 5.10 tho)
 config() {
     $workdir/common/scripts/config "$@"
 }

@@ -46,7 +46,9 @@ KERNEL_VERSION=$(make kernelversion)
 # Set variant
 log "Setting KernelSU variant..."
 declare -A KSU_VARIANTS=(
+    ["None"]="vanilla"
     ["Official"]="KSU"
+    ["Kernel Source"]="DKSU"
     ["Rissu"]="RKSU"
     ["Next"]="KSUN"
     ["Legacy"]="LegacyKSU"
@@ -162,11 +164,12 @@ config --file $DEFCONFIG_FILE --enable CONFIG_TMPFS_POSIX_ACL
 
 ## --- KernelSU setup ---
 
-# Remove KernelSU in driver in kernel source if exist
-# Ensure consistency
+# If we use clone KSU source here
+# Remove KernelSU driver
 cd "$workdir/common" || exit 1
 
-if [[ $KSU != "None" ]]; then
+ksupath="drivers/staging/kernelsu"
+if [[ $KSU != "None" && $KSU != "Kernel Source" ]]; then
     for ksupath in "drivers/staging/kernelsu" "drivers/kernelsu" "KernelSU"; do
         if [[ -d $ksupath ]]; then
             log "KernelSU driver found in $ksupath, Removing..."
@@ -182,60 +185,106 @@ fi
 
 # Install KernelSU driver
 cd $workdir
-if [[ $KSU != "None" ]]; then
-    log "Installing KernelSU..."
+log "Configuring KernelSU..."
 
-    case "$KSU" in
-    "Official") install_ksu tiann/KernelSU ;;
-    "Rissu") install_ksu rsuntk/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo susfs-v1.5.5 || echo main) ;;
-    "Next") install_ksu rifsxd/KernelSU-Next $([[ $USE_KSU_SUSFS == true ]] && echo next-susfs || echo next) ;;
-    "Legacy") install_ksu backslashxx/KernelSU $([[ $USE_KSU_SUSFS == true ]] && echo 12103+155+1 || echo magic) ;;
-    "Suki") install_ksu SukiSU-Ultra/SukiSU-Ultra $([[ $USE_KSU_SUSFS == true ]] && echo susfs-main || echo main) ;;
-    *) error "Invalid KSU value: $KSU" ;;
-    esac
+# Check for susfs
+get_ksu_variant() {
+    if [[ $USE_KSU_SUSFS == true ]]; then
+        echo "$1"
+    else
+        echo "$2"
+    fi
+}
+
+case "$KSU" in
+    "None")
+        config --file "$DEFCONFIG_FILE" --disable CONFIG_KSU
+        ;;
+
+    "Kernel Source")
+        # Enable KSU config
+        config --file "$DEFCONFIG_FILE" --enable CONFIG_KSU
+        ;;
+
+    "Rissu")
+        install_ksu "rsuntk/KernelSU" "$(get_ksu_variant susfs-v1.5.5 main)"
+        ;;
+
+    "Next")
+        install_ksu "rifsxd/KernelSU-Next" "$(get_ksu_variant next-susfs next)"
+        ;;
+
+    "Legacy")
+        install_ksu "backslashxx/KernelSU" "$(get_ksu_variant 12103+155+1 magic)"
+        ;;
+
+    "Suki")
+        install_ksu "SukiSU-Ultra/SukiSU-Ultra" "$(get_ksu_variant susfs-main main)"
+        ;;
+
+    *)
+        error "Invalid KSU value: $KSU"
+        ;;
+esac
+
+
+if [[ $USE_KSU_SUSFS == "true" && $KSU == "None" ]]; then
+    error "You can't use SuSFS without KernelSU!"
 fi
 
+if [[ $USE_KSU_SUSFS == "true" && $KSU != "None" ]]; then
+    cd "$workdir" || error "Failed to cd to workdir"
 
-# SUSFS setup
-if [[ $USE_KSU_SUSFS == "true" && -z $KSU ]]; then
-    error "You can't use SuSFS without KernelSU!"
-elif [[ -n $KSU && $USE_KSU_SUSFS == "true" ]]; then
-    cd $workdir
-
-    # clone susfs source
     log "Cloning susfs4ksu..."
-    git clone -q https://gitlab.com/simonpunk/susfs4ksu -b gki-$GKI_VERSION $workdir/susfs4ksu
-    # checkout 155-250210 on xx's ksu
-    # gki 12-5.10, change it on other version of gki.
-    [[ $KSU == "Legacy" ]] && cd susfs4ksu && git checkout 171bac640ba1e9f3dbf744ea65adec6e90adbaf9
+    if ! git clone -q https://gitlab.com/simonpunk/susfs4ksu -b "gki-$GKI_VERSION" "$workdir/susfs4ksu"; then
+        error "Failed to clone susfs4ksu"
+    fi
+
+    if [[ -n $SUSFS_COMMIT ]]; then
+        git checkout $SUSFS_COMMIT
+    fi
+    
+    # if [[ $KSU == "Legacy" ]]; then
+    #     cd "$workdir/susfs4ksu" || error "Failed to cd to susfs4ksu"
+    #     if ! git checkout 171bac640ba1e9f3dbf744ea65adec6e90adbaf9; then
+    #         error "Failed to checkout legacy SUSFS commit"
+    #     fi
+    #     cd "$workdir" || error "Failed to cd back to workdir"
+    # fi
+
     SUSFS_PATCHES="$workdir/susfs4ksu/kernel_patches"
 
-    # Copy susfs files (Kernel Side)
     log "Copying susfs files..."
-    cd $workdir/common
-    cp $SUSFS_PATCHES/include/linux/* ./include/linux/
-    cp $SUSFS_PATCHES/fs/* ./fs/
-    SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | sed 's/"//g')
+    cd "$workdir/common" || error "Failed to cd to common kernel source"
+    cp "$SUSFS_PATCHES/include/linux/"* ./include/linux/ || error "Failed to copy SUSFS header files"
+    cp "$SUSFS_PATCHES/fs/"* ./fs/ || error "Failed to copy SUSFS fs files"
 
-    # Apply kernel-side susfs patch
-    log "Patching kernel-side susfs patch"
-    if ! patch -p1 <"$SUSFS_PATCHES/50_add_susfs_in_gki-$GKI_VERSION.patch" 2>&1 | tee ./patch.log; then
-        grep -q "*FAILED*fs/devpts/inode.c*" ./patch.log || error "❌ Patch failed (not due to legacy KSU manual hook)."
-        log "⚠️ Kernel susfs patch failed on fs/devpts/inode.c."
-        if [[ $USE_KSU_MANUAL_HOOK != "true" ]]; then
-            error "❌ Your kernel-source is using manual hook but you dont enable it, sus_su would not work. exiting..."
+    SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | tr -d '"')
+    log "SUSFS version detected: $SUSFS_VERSION"
+
+    if grep -q "CONFIG_KSU_SUSFS" ./fs/Makefile; then
+        echo "Skipping SUSFS patching. Please check if SUSFS version matches on the KSU side."
+    else
+        log "Patching kernel-side SUSFS patch"
+        if ! patch -p1 <"$SUSFS_PATCHES/50_add_susfs_in_gki-$GKI_VERSION.patch" 2>&1 | tee ./patch.log; then
+            if grep -q "*FAILED*fs/devpts/inode.c*" ./patch.log; then
+                log "⚠️ Kernel SUSFS patch failed on fs/devpts/inode.c."
+                if [[ $USE_KSU_MANUAL_HOOK != "true" ]]; then
+                    error "❌ Kernel source uses manual hook but it's not enabled; SUSFS will not work. Exiting..."
+                fi
+                log "⏩ Using manual hook, skipping patch."
+                mv -f fs/devpts/inode.c.orig fs/devpts/inode.c
+            else
+                error "❌ Patch failed (not due to legacy KSU manual hook)."
+            fi
         fi
-
-        log "⏩ Using manual hook, skipping patch."
-        mv -f fs/devpts/inode.c.orig fs/devpts/inode.c
+        rm -f ./patch.log
     fi
-    rm -f ./patch.log
 
-    # Apply patch to KernelSU (KSU Side)
     if [[ $KSU == "Official" ]]; then
-        cd ../KernelSU
-        log "Applying KernelSU-side susfs patch"
-        patch -p1 <$SUSFS_PATCHES/KernelSU/10_enable_susfs_for_ksu.patch || error "KernelSU-side susfs patch failed."
+        cd ../KernelSU || error "Failed to cd to KernelSU directory"
+        log "Applying KernelSU-side SUSFS patch"
+        patch -p1 <"$SUSFS_PATCHES/KernelSU/10_enable_susfs_for_ksu.patch" || error "KernelSU-side SUSFS patch failed."
     fi
 fi
 
@@ -254,7 +303,7 @@ if [[ $USE_KSU_MANUAL_HOOK == "true" ]]; then
         \thelp\\
         \t  Keep KPROBES enabled but do not use KPROBES to implement\\
         \t  the hooks required by KernelSU, but instead hook them manually.\\
-        " "$workdir/common/drivers/kernelsu/Kconfig"
+        " "$ksupath/Kconfig"
     fi
 
     config --file $DEFCONFIG_FILE --enable CONFIG_KSU_MANUAL_HOOK
