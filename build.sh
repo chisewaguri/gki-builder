@@ -253,11 +253,16 @@ if [[ $USE_KSU_SUSFS == "true" && $KSU != "None" ]]; then
     # fi
 
     SUSFS_PATCHES="$workdir/susfs4ksu/kernel_patches"
-
-    log "Copying susfs files..."
     cd "$workdir/common" || error "Failed to cd to common kernel source"
-    cp "$SUSFS_PATCHES/include/linux/"* ./include/linux/ || error "Failed to copy SUSFS header files"
-    cp "$SUSFS_PATCHES/fs/"* ./fs/ || error "Failed to copy SUSFS fs files"
+    
+    # skip if susfs exist
+    # might be not the best method
+    # revisit laters
+    if [[ ! -f "./include/linux/susfs.h" ]]; then
+        log "Copying susfs files..."
+        cp "$SUSFS_PATCHES/include/linux/"* ./include/linux/ || error "Failed to copy SUSFS header files"
+        cp "$SUSFS_PATCHES/fs/"* ./fs/ || error "Failed to copy SUSFS fs files"
+    fi
 
     SUSFS_VERSION=$(grep -E '^#define SUSFS_VERSION' ./include/linux/susfs.h | cut -d' ' -f3 | tr -d '"')
     log "SUSFS version detected: $SUSFS_VERSION"
