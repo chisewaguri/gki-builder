@@ -215,7 +215,7 @@ case "$KSU" in
         ;;
 
     "Legacy")
-        install_ksu "backslashxx/KernelSU" "$(get_ksu_variant 12103+155+1 magic)"
+        install_ksu "backslashxx/KernelSU" "$(get_ksu_variant 12103+155+1 master)"
         ;;
 
     "Suki")
