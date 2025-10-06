@@ -298,17 +298,32 @@ if [[ $USE_KSU_MANUAL_HOOK == "true" ]]; then
     cd $workdir/common
 
     # manual hook config for kernel that use this config
-    if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
-        sed -i "/^endmenu/i\\
-        config KSU_MANUAL_HOOK\\
-        \tbool \"Manual hooking without kprobes\"\\
-        \tdepends on KSU && KSU != m\\
-        \tdepends on KPROBES\\
-        \tdefault n\\
-        \thelp\\
-        \t  Keep KPROBES enabled but do not use KPROBES to implement\\
-        \t  the hooks required by KernelSU, but instead hook them manually.\\
-        " "$ksupath/Kconfig"
+    if [[ $KSU == "Kernel Source" ]]; then
+        if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
+            sed -i "/^endmenu/i\\
+            config KSU_MANUAL_HOOK\\
+            \tbool \"Manual hooking without kprobes\"\\
+            \tdepends on KSU && KSU != m\\
+            \tdepends on KPROBES\\
+            \tdefault n\\
+            \thelp\\
+            \t  Keep KPROBES enabled but do not use KPROBES to implement\\
+            \t  the hooks required by KernelSU, but instead hook them manually.\\
+            " "$ksupath/Kconfig"
+        fi
+    else
+        if grep -q "CONFIG_KSU_MANUAL_HOOK" fs/exec.c; then
+            sed -i "/^endmenu/i\\
+            config KSU_MANUAL_HOOK\\
+            \tbool \"Manual hooking without kprobes\"\\
+            \tdepends on KSU && KSU != m\\
+            \tdepends on KPROBES\\
+            \tdefault n\\
+            \thelp\\
+            \t  Keep KPROBES enabled but do not use KPROBES to implement\\
+            \t  the hooks required by KernelSU, but instead hook them manually.\\
+            " "$workdir/common/drivers/kernelsu/Kconfig"
+        fi
     fi
 
     config --file $DEFCONFIG_FILE --enable CONFIG_KSU_MANUAL_HOOK
