@@ -7,8 +7,8 @@ KERNEL_NAME="gki-rama"
 GKI_VERSION="android14-6.1"
 
 # Build variables
-# export TZ="Asia/Makassar"
-# export KBUILD_BUILD_USER="eraselk"
+export TZ="Asia/Makassar"
+export KBUILD_BUILD_USER="eraselk"
 export KBUILD_BUILD_HOST="$KERNEL_NAME"
 export KBUILD_BUILD_TIMESTAMP=$(date)
 
