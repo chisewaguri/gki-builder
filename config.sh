@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Kernel name
-KERNEL_NAME="gki-rama"
+KERNEL_NAME="gki"
 
 # GKI Version
 GKI_VERSION="android14-6.1"
@@ -13,12 +13,12 @@ export KBUILD_BUILD_HOST="$KERNEL_NAME"
 export KBUILD_BUILD_TIMESTAMP=$(date)
 
 # AnyKernel variables
-ANYKERNEL_REPO="https://github.com/hazepynut/anykernel"
-ANYKERNEL_BRANCH="gki"
+ANYKERNEL_REPO="https://github.com/WildKernels/AnyKernel3"
+ANYKERNEL_BRANCH="gki-2.0"
 
 # Kernel
-KERNEL_REPO="https://github.com/ramabondanp/android_kernel_common-6.1"
-KERNEL_BRANCH="android14-6.1"
+KERNEL_REPO="https://android.googlesource.com/kernel/common"
+KERNEL_BRANCH="android14-6.1-lts"
 KERNEL_DEFCONFIG="defconfig"
 DEFCONFIG_FILE="$workdir/common/arch/arm64/configs/$KERNEL_DEFCONFIG"
 
