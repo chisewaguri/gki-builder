@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
 # Kernel name
-KERNEL_NAME="Glow-Chise-v3.9+"
+KERNEL_NAME="perf-g5e09a5ac46e0a54cbq"
 
 # GKI Version
 GKI_VERSION="android12-5.10"
 
 # Build variables
 export TZ="Asia/Makassar"
-export KBUILD_BUILD_USER="eraselk"
-export KBUILD_BUILD_HOST="$KERNEL_NAME"
+export KBUILD_BUILD_USER="builder"
+export KBUILD_BUILD_HOST="xiaomi"
 export KBUILD_BUILD_TIMESTAMP=$(date)
 
 # AnyKernel variables
@@ -17,9 +17,9 @@ ANYKERNEL_REPO="https://github.com/hazepynut/anykernel"
 ANYKERNEL_BRANCH="gki"
 
 # Kernel
-KERNEL_REPO="https://github.com/pzqqt/android_kernel_xiaomi_marble"
-KERNEL_BRANCH="melt-rebase"
-KERNEL_DEFCONFIG="marble_defconfig"
+KERNEL_REPO="https://github.com/AnymoreProject/android_kernel_vayu"
+KERNEL_BRANCH="16-miui"
+KERNEL_DEFCONFIG="vayu_defconfig"
 DEFCONFIG_FILE="$workdir/common/arch/arm64/configs/$KERNEL_DEFCONFIG"
 
 # Defconfigs would be merged in the compiling processes
