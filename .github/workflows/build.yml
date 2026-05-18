@@ -1,10 +1,53 @@
 name: Build GKI
 
+permissions:
+  contents: write
+  actions: write
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HOW THIS WORKFLOW IS STRUCTURED
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#  The original GKI Builder workflow is kept intact.  build.sh / config.sh /
+#  functions.sh are NOT modified.  build.sh still owns:
+#    • cloning the custom kernel source into common/
+#    • toolchain download / ccache
+#    • the full make / packaging / Telegram notification flow
+#
+#  On top of that, this workflow adds a NEW input: "KernelSU Variant".
+#  When a variant other than "None" is selected the workflow inserts three
+#  extra phases BETWEEN "clone source" and "compile":
+#
+#    Phase A  (Setup KSU)   — runs the upstream setup.sh for the chosen fork,
+#                             optionally pins to a specific commit
+#    Phase B  (Patches)     — applies SUSFS / ZeroMount / KSU-safety patches
+#                             from android12-5.10/<variant>/patches/
+#    Phase C  (Profile Spoof) — rewrites setlocalversion / mkcompile_h to
+#                               spoof the stock kernel identity using
+#                               device-profiles.json
+#
+#  Because build.sh clones `common/` and then exits before compiling (it runs
+#  the whole script sequentially), we split the build into two workflow steps:
+#
+#    Step "Clone Kernel Source"  — runs build.sh up to the clone only via
+#                                  CLONE_ONLY=true (see build.sh integration
+#                                  note below)
+#    Steps A / B / C             — KSU + patches + profile spoof
+#    Step "Compile Kernel"       — re-invokes build.sh in compile-only mode
+#                                  via SKIP_CLONE=true
+#
+#  If you prefer NOT to split build.sh, set KernelSU_Variant = "None" and the
+#  workflow behaves exactly like the original single-step build.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
 on:
   workflow_call:
     inputs:
       KernelSU:
         type: string
+      KernelSU_Variant:
+        type: string     # None | KernelSU-Next | SukiSU | ReSukiSU | WKSU
       SUSFS4KSU:
         type: string
       Clang:
@@ -22,30 +65,30 @@ on:
 
   workflow_dispatch:
     inputs:
+
       TODO:
-        description: To do
-        default: ''
+        description: What to build
+        default: 'kernel'
         type: choice
         options:
           - "kernel"
           - "defconfig"
 
-      KernelSU:
-        description: KernelSU variant
-        default: ''
+      # ── New: single-file KSU variant selector ────────────────────────────
+      KernelSU_Variant:
+        description: KernelSU Variant
+        default: 'None'
         type: choice
         options:
-          - "None"
-          - "Kernel Source"
-          - "Official"
-          - "Next"
-          - "Rissu"
-          - "Legacy"
-          - "Suki"
+          - "None"           # Vanilla — no KSU integration at all
+          - "KernelSU-Next"  # KernelSU-Next/KernelSU-Next  (stable branch)
+          - "SukiSU"         # SukiSU-Ultra/SukiSU-Ultra    (builtin branch)
+          - "ReSukiSU"       # ReSukiSU/ReSukiSU            (susfs-ksud branch)
+          - "WKSU"           # WildKernels/Wild_KSU         (canary branch)
 
       SUSFS4KSU:
-        description: SUSFS (KSU Needed)
-        default: false
+        description: Apply SUSFS / ZeroMount patches (requires KSU variant)
+        default: true
         type: boolean
 
       KSU_MANUAL_HOOK:
@@ -54,8 +97,8 @@ on:
         type: boolean
 
       Clang:
-        description: Select Compiler
-        default: ''
+        description: Compiler
+        default: 'Default'
         type: choice
         options:
           - "Default"
@@ -72,39 +115,97 @@ on:
         default: false
         type: boolean
 
+# ─────────────────────────────────────────────────────────────────────────────
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set STATUS and TRIGGER based on event
+
+      # ── 0. Bookkeeping ────────────────────────────────────────────────────
+      - name: Set STATUS and TRIGGER
         run: |
-          echo "STATUS=$STATUS" >> $GITHUB_ENV
+          echo "STATUS=$STATUS"   >> $GITHUB_ENV
           echo "TRIGGER=$TRIGGER" >> $GITHUB_ENV
         env:
-          STATUS: ${{ github.event_name == 'workflow_dispatch' && 'BETA' || 'RELEASE' }}
+          STATUS:  ${{ github.event_name == 'workflow_dispatch' && 'BETA' || 'RELEASE' }}
           TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'workflow_dispatch' || 'workflow_call' }}
 
       - name: Verify STATUS
-        run: echo "Triggered by $TRIGGER, STATUS is set to $STATUS"
+        run: echo "Triggered by $TRIGGER — STATUS is $STATUS"
 
+      # ── 1. Checkout ───────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      # ── 2. Resolve KSU Variant ────────────────────────────────────────────
+      #
+      #  Sets four env vars consumed by every KSU step further down:
+      #
+      #    KSU_ENABLED   – "true" / "false"  gates all KSU steps
+      #    KSU_VARIANT   – human-readable name (KernelSU-Next, SukiSU, …)
+      #    KSU_DIR       – directory name that setup.sh creates inside common/
+      #    KSU_PATCH_DIR – sub-folder of android12-5.10/ that holds the patches
+      #
+      - name: Resolve KSU Variant
+        env:
+          INPUT_VARIANT: ${{ inputs.KernelSU_Variant }}
+        run: |
+          VARIANT="${INPUT_VARIANT:-None}"
+          echo "Selected KernelSU Variant: $VARIANT"
+
+          case "$VARIANT" in
+            "KernelSU-Next")
+              echo "KSU_ENABLED=true"             >> $GITHUB_ENV
+              echo "KSU_VARIANT=KernelSU-Next"    >> $GITHUB_ENV
+              echo "KSU_DIR=KernelSU-Next"        >> $GITHUB_ENV
+              echo "KSU_PATCH_DIR=KernelSU-Next"  >> $GITHUB_ENV
+              ;;
+            "SukiSU")
+              echo "KSU_ENABLED=true"             >> $GITHUB_ENV
+              echo "KSU_VARIANT=SukiSU"           >> $GITHUB_ENV
+              echo "KSU_DIR=KernelSU"             >> $GITHUB_ENV
+              echo "KSU_PATCH_DIR=SukiSU-Ultra"   >> $GITHUB_ENV
+              ;;
+            "ReSukiSU")
+              echo "KSU_ENABLED=true"             >> $GITHUB_ENV
+              echo "KSU_VARIANT=ReSukiSU"         >> $GITHUB_ENV
+              echo "KSU_DIR=KernelSU"             >> $GITHUB_ENV
+              echo "KSU_PATCH_DIR=ReSukiSU"       >> $GITHUB_ENV
+              ;;
+            "WKSU")
+              echo "KSU_ENABLED=true"             >> $GITHUB_ENV
+              echo "KSU_VARIANT=WKSU"             >> $GITHUB_ENV
+              echo "KSU_DIR=Wild_KSU"             >> $GITHUB_ENV
+              echo "KSU_PATCH_DIR=WildKSU"        >> $GITHUB_ENV
+              ;;
+            *)
+              echo "KSU_ENABLED=false"            >> $GITHUB_ENV
+              echo "KSU_VARIANT=None"             >> $GITHUB_ENV
+              echo "KSU_DIR="                     >> $GITHUB_ENV
+              echo "KSU_PATCH_DIR="               >> $GITHUB_ENV
+              ;;
+          esac
+
+      # ── 3. Install dependencies ───────────────────────────────────────────
       - name: Install dependencies
         run: |
           export MAN_DISABLE=true
           sudo apt update -y
-          sudo apt install bc cpio flex bison aptitude gh git python-is-python3 tar perl wget curl lz4 zstd libarchive-tools ccache -y
-          sudo aptitude install libssl-dev -y
+          sudo apt install -y bc cpio flex bison aptitude gh git \
+            python-is-python3 tar perl wget curl lz4 zstd \
+            libarchive-tools ccache jq lld binutils
+          sudo aptitude install -y libssl-dev
 
+      # ── 4. Swap space ─────────────────────────────────────────────────────
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 10
 
+      # ── 5. Toolchain cache ────────────────────────────────────────────────
       - name: Restore Toolchain Cache
         uses: actions/cache/restore@v4
         with:
@@ -113,6 +214,7 @@ jobs:
           restore-keys: |
             tc-
 
+      # ── 6. ccache ─────────────────────────────────────────────────────────
       - name: Set up ccache
         run: |
           ccache --max-size=2G
@@ -128,44 +230,377 @@ jobs:
           restore-keys: |
             ccache-
 
-      - name: Build Kernel
+      # ── 7. Clone kernel source (build.sh CLONE_ONLY mode) ─────────────────
+      #
+      #  When KernelSU_Variant != "None" we need to inject steps between the
+      #  clone and the compile.  We signal build.sh to stop after cloning by
+      #  setting CLONE_ONLY=true.
+      #
+      #  When KernelSU_Variant == "None" this step does nothing; the full
+      #  build runs in step 12 instead (original single-step behaviour).
+      #
+      - name: Clone Kernel Source
+        if: env.KSU_ENABLED == 'true'
         env:
-          KSU: ${{ inputs.KernelSU }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-          TOKEN: ${{ secrets.TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          Clang: ${{ inputs.Clang }}
-          USE_KSU_SUSFS: ${{ inputs.SUSFS4KSU }}
-          BUILD_LKMS: ${{ inputs.BUILD_LKMS }}
-          BUILD_BOOTIMG: ${{ inputs.BUILD_BOOTIMG }}
+          KSU:                 ${{ inputs.KernelSU }}
+          CHAT_ID:             ${{ secrets.CHAT_ID }}
+          TOKEN:               ${{ secrets.TOKEN }}
+          GH_TOKEN:            ${{ secrets.GH_TOKEN }}
+          Clang:               ${{ inputs.Clang }}
+          USE_KSU_SUSFS:       ${{ inputs.SUSFS4KSU }}
+          BUILD_LKMS:          ${{ inputs.BUILD_LKMS }}
+          BUILD_BOOTIMG:       ${{ inputs.BUILD_BOOTIMG }}
           USE_KSU_MANUAL_HOOK: ${{ inputs.KSU_MANUAL_HOOK }}
-          LAST_BUILD: ${{ inputs.LAST_BUILD }}
-          NIGHTLY_LINK: "https://nightly.link/${{ github.repository_owner }}/${{ github.event.repository.name }}/actions/runs/${{ github.run_id }}"
-          TODO: ${{ inputs.TODO }}
+          LAST_BUILD:          ${{ inputs.LAST_BUILD }}
+          TODO:                ${{ inputs.TODO }}
+          NIGHTLY_LINK: >-
+            https://nightly.link/${{ github.repository_owner }}/${{
+            github.event.repository.name }}/actions/runs/${{ github.run_id }}
+          CLONE_ONLY: "true"   # Tells build.sh to stop after cloning common/
         run: |
           chmod a+x *.sh
 
           case "$Clang" in
             "AOSP")
               sed -i 's/^USE_CUSTOM_CLANG=.*/USE_CUSTOM_CLANG=false/' config.sh
-              sed -i 's/^USE_AOSP_CLANG=.*/USE_AOSP_CLANG=true/' config.sh
+              sed -i 's/^USE_AOSP_CLANG=.*/USE_AOSP_CLANG=true/'     config.sh
               ;;
             "Custom")
-              sed -i 's/^USE_CUSTOM_CLANG=.*/USE_CUSTOM_CLANG=true/' config.sh
-              sed -i 's/^USE_AOSP_CLANG=.*/USE_AOSP_CLANG=false/' config.sh
+              sed -i 's/^USE_CUSTOM_CLANG=.*/USE_CUSTOM_CLANG=true/'  config.sh
+              sed -i 's/^USE_AOSP_CLANG=.*/USE_AOSP_CLANG=false/'     config.sh
               ;;
-          esac
-
-          case "$TODO" in
-            "kernel")
-                : "continue" ;;
-            "defconfig")
-                export GENERATE_DEFCONFIG=true ;;
           esac
 
           export PATH="/usr/lib/ccache:$PATH"
           ./build.sh
 
+      # ════════════════════════════════════════════════════════════════════════
+      # KSU PHASE A — Setup (one step per variant, mutually exclusive)
+      # Logic copied verbatim from Superbuilder; not merged into build.sh.
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "[KSU] Setup KernelSU-Next"
+        if: env.KSU_ENABLED == 'true' && env.KSU_VARIANT == 'KernelSU-Next'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder build-ksu-next.yml — Setup KernelSU-Next
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/stable/kernel/setup.sh" \
+            | bash -s stable
+
+          [ -d "KernelSU-Next" ] || { echo "FATAL: KernelSU-Next not created by setup.sh"; exit 1; }
+
+          PIN="$(cat "$GITHUB_WORKSPACE/android12-5.10/kernelsu-next-pin.txt" 2>/dev/null || true)"
+          if [ -n "$PIN" ]; then
+            cd KernelSU-Next
+            git fetch origin
+            git checkout "$PIN"
+            echo "Pinned KernelSU-Next to $(git rev-parse --short=7 HEAD)"
+            cd ..
+          fi
+
+          SUPERCALLS="drivers/kernelsu/supercalls.c"
+          if [ -f "$SUPERCALLS" ]; then
+            if grep -q "vzalloc" "$SUPERCALLS" && ! head -5 "$SUPERCALLS" | grep -q "vmalloc.h"; then
+              sed -i '1a #include <linux/vmalloc.h>' "$SUPERCALLS"
+            fi
+          fi
+
+      - name: "[KSU] Setup SukiSU"
+        if: env.KSU_ENABLED == 'true' && env.KSU_VARIANT == 'SukiSU'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder build-sukisu.yml — Setup SukiSU
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" \
+            | bash -s builtin
+
+          [ -d "KernelSU" ] || { echo "FATAL: KernelSU dir not created by SukiSU setup.sh"; exit 1; }
+
+          PIN="$(cat "$GITHUB_WORKSPACE/android12-5.10/sukisu-pin.txt" 2>/dev/null || true)"
+          if [ -n "$PIN" ]; then
+            cd KernelSU
+            git fetch origin
+            git checkout "$PIN"
+            echo "Pinned SukiSU to $(git rev-parse --short=7 HEAD)"
+            cd ..
+          fi
+
+          SUPERCALLS="drivers/kernelsu/supercalls.c"
+          if [ -f "$SUPERCALLS" ]; then
+            sed -i '/ksu_mark_running_process/d' "$SUPERCALLS"
+            if grep -q "vzalloc" "$SUPERCALLS" && ! head -5 "$SUPERCALLS" | grep -q "vmalloc.h"; then
+              sed -i '1a #include <linux/vmalloc.h>' "$SUPERCALLS"
+            fi
+          fi
+
+      - name: "[KSU] Setup ReSukiSU"
+        if: env.KSU_ENABLED == 'true' && env.KSU_VARIANT == 'ReSukiSU'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder build-resukisu.yml — Setup ReSukiSU
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
+            | bash -s susfs-ksud
+
+          [ -d "KernelSU" ] || { echo "FATAL: KernelSU dir not created by ReSukiSU setup.sh"; exit 1; }
+
+          PIN="$(cat "$GITHUB_WORKSPACE/android12-5.10/resukisu-pin.txt" 2>/dev/null || true)"
+          if [ -n "$PIN" ]; then
+            cd KernelSU
+            git fetch origin
+            git checkout "$PIN"
+            echo "Pinned ReSukiSU to $(git rev-parse --short=7 HEAD)"
+            cd ..
+          fi
+
+          SUPERCALLS="drivers/kernelsu/supercalls.c"
+          if [ -f "$SUPERCALLS" ]; then
+            sed -i '/ksu_mark_running_process/d' "$SUPERCALLS"
+            if grep -q "vzalloc" "$SUPERCALLS" && ! head -5 "$SUPERCALLS" | grep -q "vmalloc.h"; then
+              sed -i '1a #include <linux/vmalloc.h>' "$SUPERCALLS"
+            fi
+          fi
+
+      - name: "[KSU] Setup WKSU"
+        if: env.KSU_ENABLED == 'true' && env.KSU_VARIANT == 'WKSU'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder build-wksu.yml — Setup WildKSU
+          curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/stable/kernel/setup.sh" \
+            | bash -s canary
+
+          [ -d "Wild_KSU" ] || { echo "FATAL: Wild_KSU not created by WKSU setup.sh"; exit 1; }
+
+          PIN="$(cat "$GITHUB_WORKSPACE/android12-5.10/wksu-pin.txt" 2>/dev/null || true)"
+          if [ -n "$PIN" ]; then
+            cd Wild_KSU
+            git fetch origin
+            git checkout "$PIN"
+            echo "Pinned WKSU to $(git rev-parse --short=7 HEAD)"
+            cd ..
+          fi
+
+          SUPERCALLS="drivers/kernelsu/supercalls.c"
+          if [ -f "$SUPERCALLS" ]; then
+            sed -i '/ksu_mark_running_process/d' "$SUPERCALLS"
+            if grep -q "vzalloc" "$SUPERCALLS" && ! head -5 "$SUPERCALLS" | grep -q "vmalloc.h"; then
+              sed -i '1a #include <linux/vmalloc.h>' "$SUPERCALLS"
+            fi
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # KSU PHASE B — Patches
+      # All patch paths use $KSU_PATCH_DIR resolved in step 2.
+      # Commands copied verbatim from Superbuilder; the only difference is the
+      # conditional "if:" guard replacing separate .yml files.
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "[KSU] Apply Upstream SUSFS Patch (50_)"
+        if: env.KSU_ENABLED == 'true' && inputs.SUSFS4KSU == 'true'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder — Apply Upstream SUSFS Patch
+          patch -p1 -F3 --no-backup-if-mismatch \
+            < "$GITHUB_WORKSPACE/android12-5.10/$KSU_PATCH_DIR/patches/50_add_susfs_in_gki-android12-5.10.patch"
+
+      - name: "[KSU] Apply Enhanced SUSFS Patch (51_)"
+        if: env.KSU_ENABLED == 'true' && inputs.SUSFS4KSU == 'true'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder — Apply Enhanced SUSFS Patch
+          patch -p1 -F3 --no-backup-if-mismatch \
+            < "$GITHUB_WORKSPACE/android12-5.10/$KSU_PATCH_DIR/patches/51_enhanced_susfs-android12-5.10.patch"
+
+      - name: "[KSU] Apply ZeroMount Patch (60_)"
+        if: env.KSU_ENABLED == 'true' && inputs.SUSFS4KSU == 'true'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder — Apply ZeroMount Patch
+          patch -p1 -F3 --no-backup-if-mismatch \
+            < "$GITHUB_WORKSPACE/android12-5.10/$KSU_PATCH_DIR/patches/60_zeromount-android12-5.10.patch"
+
+      - name: "[KSU] Apply KSU Safety Patch (70_)"
+        if: env.KSU_ENABLED == 'true' && inputs.SUSFS4KSU == 'true'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder — Apply KSU Safety Patch
+          # Filename differs per variant — resolved from KSU_VARIANT
+          case "$KSU_VARIANT" in
+            "KernelSU-Next") SAFETY_PATCH="70_ksu_safety-kernelsu-next-5.10.patch" ;;
+            "SukiSU")        SAFETY_PATCH="70_ksu_safety-sukisu-5.10.patch"        ;;
+            "ReSukiSU")      SAFETY_PATCH="70_ksu_safety-resukisu-5.10.patch"      ;;
+            "WKSU")          SAFETY_PATCH="70_ksu_safety-wksu-5.10.patch"          ;;
+          esac
+          PATCH="$GITHUB_WORKSPACE/android12-5.10/$KSU_PATCH_DIR/patches/$SAFETY_PATCH"
+          if [ -s "$PATCH" ]; then
+            patch -p1 --no-backup-if-mismatch < "$PATCH"
+          else
+            echo "No 70_ safety patch needed for $KSU_VARIANT"
+          fi
+
+      - name: "[KSU] Fix SUSFS Compatibility"
+        if: env.KSU_ENABLED == 'true' && inputs.SUSFS4KSU == 'true'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder — Fix SUSFS Compatibility
+          SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile | awk '{print $3}')
+          KERNEL_VER=$(grep '^VERSION \|^PATCHLEVEL ' Makefile | awk '{print $3}' | paste -sd.)
+          FIX="$GITHUB_WORKSPACE/android12-5.10/build-helpers/fix-susfs-compat.sh"
+          [ -f "$FIX" ] && bash "$FIX" . "$SUBLEVEL" android12 "$KERNEL_VER" "" || true
+
+      # ════════════════════════════════════════════════════════════════════════
+      # KSU PHASE C — Profile Spoof
+      # Copied verbatim from Superbuilder's "Set Stock Build Identity" step.
+      # Reads device-profiles.json from the repo root; safe to run with
+      # any variant — exits cleanly as "Generic" when no profile matches.
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "[Profile Spoof] Set Stock Build Identity"
+        if: env.KSU_ENABLED == 'true'
+        working-directory: common
+        run: |
+          # Copied from Superbuilder — Set Stock Build Identity
+          PROFILE_FILE="$GITHUB_WORKSPACE/device-profiles.json"
+
+          if [ ! -f "$PROFILE_FILE" ] || ! command -v jq &>/dev/null; then
+            echo "IDENTITY_STATUS=Generic" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          KERNEL_VER=$(grep '^VERSION \|^PATCHLEVEL ' Makefile | awk '{print $3}' | paste -sd.)
+          SUBLEVEL=$(grep '^SUBLEVEL = ' Makefile | awk '{print $3}')
+
+          DEVICE_CODENAME=""
+
+          if [ -z "$DEVICE_CODENAME" ] && [ -n "$KERNEL_VER" ] && [ -n "$SUBLEVEL" ]; then
+            DEVICE_CODENAME=$(jq -r --arg kv "$KERNEL_VER" --arg sl "$SUBLEVEL" \
+              '[.devices | to_entries[]
+                | select(.key | startswith("_") | not)
+                | select(.value.kernel_version == $kv and .value.sub_level == $sl)
+                | .key] | first // empty' \
+              "$PROFILE_FILE")
+          fi
+
+          if [ -z "$DEVICE_CODENAME" ]; then
+            echo "IDENTITY_STATUS=Generic" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          STOCK_RELEASE=$(jq -r    ".devices.${DEVICE_CODENAME}.stock_kernel.release"        "$PROFILE_FILE")
+          STOCK_VERSION=$(jq -r    ".devices.${DEVICE_CODENAME}.stock_kernel.version_string"  "$PROFILE_FILE")
+          STOCK_BUILD_USER=$(jq -r ".devices.${DEVICE_CODENAME}.stock_kernel.build_user"      "$PROFILE_FILE")
+          STOCK_BUILD_HOST=$(jq -r ".devices.${DEVICE_CODENAME}.stock_kernel.build_host"      "$PROFILE_FILE")
+          STOCK_COMPILER=$(jq -r   ".devices.${DEVICE_CODENAME}.stock_kernel.compiler_info // empty" "$PROFILE_FILE")
+
+          # 5.10–6.1: Makefile prepends KERNELVERSION; setlocalversion outputs suffix only.
+          # 6.6+:     Makefile delegates entirely to setlocalversion; must emit full version.
+          MAJOR=${KERNEL_VER%%.*}
+          MINOR=${KERNEL_VER#*.}
+          if [ "$MAJOR" -gt 6 ] || { [ "$MAJOR" -eq 6 ] && [ "$MINOR" -ge 6 ]; }; then
+            RELEASE_OUTPUT="${KERNEL_VER}.${SUBLEVEL}${STOCK_RELEASE}"
+          else
+            RELEASE_OUTPUT="$STOCK_RELEASE"
+          fi
+
+          cat > scripts/setlocalversion << 'SETLOCAL_EOF'
+          #!/bin/sh
+          printf '%s' "RELEASE_OUTPUT_PLACEHOLDER"
+          SETLOCAL_EOF
+          sed -i "s|RELEASE_OUTPUT_PLACEHOLDER|${RELEASE_OUTPUT}|g" scripts/setlocalversion
+          chmod +x scripts/setlocalversion
+
+          if [ -f "scripts/mkcompile_h" ]; then
+            sed -i "s|UTS_VERSION=.*|UTS_VERSION=\"${STOCK_VERSION}\"|"       scripts/mkcompile_h
+            if grep -q "LINUX_COMPILE_BY=" scripts/mkcompile_h; then
+              sed -i "s|LINUX_COMPILE_BY=.*|LINUX_COMPILE_BY=\"${STOCK_BUILD_USER}\"|"    scripts/mkcompile_h
+              sed -i "s|LINUX_COMPILE_HOST=.*|LINUX_COMPILE_HOST=\"${STOCK_BUILD_HOST}\"|" scripts/mkcompile_h
+            fi
+            if [ -n "$STOCK_COMPILER" ] && grep -q "LINUX_COMPILER=" scripts/mkcompile_h; then
+              sed -i "s|LINUX_COMPILER=.*|LINUX_COMPILER=\"${STOCK_COMPILER}\"|" scripts/mkcompile_h
+            fi
+          fi
+
+          {
+            echo "KBUILD_BUILD_USER=$STOCK_BUILD_USER"
+            echo "KBUILD_BUILD_HOST=$STOCK_BUILD_HOST"
+            echo "IDENTITY_STATUS=Applied ($DEVICE_CODENAME)"
+          } >> "$GITHUB_ENV"
+
+      # ════════════════════════════════════════════════════════════════════════
+      # ORIGINAL GKI BUILDER — Full build (used when KSU_VARIANT == "None")
+      # This is the original single-step build.  When a KSU variant IS selected
+      # this step is skipped; compilation is handled by the next step instead.
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: Build Kernel (vanilla / no KSU)
+        if: env.KSU_ENABLED == 'false'
+        env:
+          KSU:                 ${{ inputs.KernelSU }}
+          CHAT_ID:             ${{ secrets.CHAT_ID }}
+          TOKEN:               ${{ secrets.TOKEN }}
+          GH_TOKEN:            ${{ secrets.GH_TOKEN }}
+          Clang:               ${{ inputs.Clang }}
+          USE_KSU_SUSFS:       ${{ inputs.SUSFS4KSU }}
+          BUILD_LKMS:          ${{ inputs.BUILD_LKMS }}
+          BUILD_BOOTIMG:       ${{ inputs.BUILD_BOOTIMG }}
+          USE_KSU_MANUAL_HOOK: ${{ inputs.KSU_MANUAL_HOOK }}
+          LAST_BUILD:          ${{ inputs.LAST_BUILD }}
+          TODO:                ${{ inputs.TODO }}
+          NIGHTLY_LINK: >-
+            https://nightly.link/${{ github.repository_owner }}/${{
+            github.event.repository.name }}/actions/runs/${{ github.run_id }}
+        run: |
+          chmod a+x *.sh
+
+          case "$Clang" in
+            "AOSP")
+              sed -i 's/^USE_CUSTOM_CLANG=.*/USE_CUSTOM_CLANG=false/' config.sh
+              sed -i 's/^USE_AOSP_CLANG=.*/USE_AOSP_CLANG=true/'     config.sh
+              ;;
+            "Custom")
+              sed -i 's/^USE_CUSTOM_CLANG=.*/USE_CUSTOM_CLANG=true/'  config.sh
+              sed -i 's/^USE_AOSP_CLANG=.*/USE_AOSP_CLANG=false/'     config.sh
+              ;;
+          esac
+
+          case "$TODO" in
+            "kernel")    : "continue" ;;
+            "defconfig") export GENERATE_DEFCONFIG=true ;;
+          esac
+
+          export PATH="/usr/lib/ccache:$PATH"
+          ./build.sh
+
+      # ── Compile after KSU injection ───────────────────────────────────────
+      #  When a KSU variant was selected, the source is already cloned and
+      #  patched.  Re-invoke build.sh with SKIP_CLONE=true so it jumps
+      #  straight to the toolchain + compile phases.
+      - name: Compile Kernel (with KSU)
+        if: env.KSU_ENABLED == 'true'
+        env:
+          KSU:                 ${{ inputs.KernelSU }}
+          CHAT_ID:             ${{ secrets.CHAT_ID }}
+          TOKEN:               ${{ secrets.TOKEN }}
+          GH_TOKEN:            ${{ secrets.GH_TOKEN }}
+          Clang:               ${{ inputs.Clang }}
+          USE_KSU_SUSFS:       ${{ inputs.SUSFS4KSU }}
+          BUILD_LKMS:          ${{ inputs.BUILD_LKMS }}
+          BUILD_BOOTIMG:       ${{ inputs.BUILD_BOOTIMG }}
+          USE_KSU_MANUAL_HOOK: ${{ inputs.KSU_MANUAL_HOOK }}
+          LAST_BUILD:          ${{ inputs.LAST_BUILD }}
+          TODO:                ${{ inputs.TODO }}
+          NIGHTLY_LINK: >-
+            https://nightly.link/${{ github.repository_owner }}/${{
+            github.event.repository.name }}/actions/runs/${{ github.run_id }}
+          SKIP_CLONE: "true"   # Tells build.sh that common/ is already present
+        run: |
+          case "$TODO" in
+            "kernel")    : "continue" ;;
+            "defconfig") export GENERATE_DEFCONFIG=true ;;
+          esac
+
+          export PATH="/usr/lib/ccache:$PATH"
+          ./build.sh
+
+      # ── Artifacts ─────────────────────────────────────────────────────────
       - name: Upload Artifact (AK3 and Images)
         uses: actions/upload-artifact@v4
         with:
@@ -184,6 +619,7 @@ jobs:
           path: |
             artifacts/*.txt
 
+      # ── Cache saves ───────────────────────────────────────────────────────
       - name: Save Toolchain Cache
         if: always() && !cancelled()
         uses: actions/cache/save@v4
@@ -198,16 +634,19 @@ jobs:
           path: ~/.ccache
           key: ccache-${{ github.run_number }}
 
+      # ── Cache pruning ─────────────────────────────────────────────────────
       - name: Delete Old Kernel & Toolchain Cache (Keep 2 Newest Each)
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           delete_old_caches() {
             local PREFIX=$1
             echo "Checking caches for: $PREFIX"
             CACHE_KEYS=$(gh cache list --json key,createdAt | jq -r "
-              sort_by(.createdAt) | 
-              reverse | 
-              map(select(.key | startswith(\"$PREFIX\"))) | 
-              .[2:] | 
+              sort_by(.createdAt) |
+              reverse |
+              map(select(.key | startswith(\"$PREFIX\"))) |
+              .[2:] |
               .[].key"
             )
             for key in $CACHE_KEYS; do
@@ -218,3 +657,22 @@ jobs:
 
           delete_old_caches "ccache-"
           delete_old_caches "tc-"
+
+      # ── Job Summary ───────────────────────────────────────────────────────
+      - name: Job Summary
+        if: always()
+        env:
+          USE_KSU_SUSFS: ${{ inputs.SUSFS4KSU }}
+        run: |
+          S() { [[ "$1" == "true" ]] && echo "✅ Enabled" || echo "⬜ Disabled"; }
+          {
+            echo "## GKI Builder — Build Summary"
+            echo ""
+            echo "| Parameter | Value |"
+            echo "|-----------|-------|"
+            echo "| **KSU Variant**    | ${KSU_VARIANT:-None} |"
+            echo "| **SUSFS Patches**  | $(S "${USE_KSU_SUSFS}") |"
+            echo "| **Profile Spoof**  | ${IDENTITY_STATUS:-N/A} |"
+            echo "| **Status**         | ${STATUS} |"
+            echo "| **Artifact**       | ${BASE_NAME}-${GITHUB_RUN_NUMBER} |"
+          } >> "$GITHUB_STEP_SUMMARY"

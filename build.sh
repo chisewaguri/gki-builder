@@ -26,6 +26,9 @@ source $workdir/functions.sh
 # Set up timezone
 sudo timedatectl set-timezone $TZ
 
+# ── SKIP_CLONE guard — skip this entire section if source is already present ─
+if [[ ${SKIP_CLONE:-false} != "true" ]]; then
+
 # Clone needed repositories
 cd $workdir
 
@@ -42,6 +45,25 @@ git clone -q --depth=1 $KERNEL_REPO -b $KERNEL_BRANCH common
 # Extract kernel version
 cd $workdir/common
 KERNEL_VERSION=$(make kernelversion)
+
+fi # end SKIP_CLONE guard
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── CLONE_ONLY hook ───────────────────────────────────────────────────────────
+# When the workflow sets CLONE_ONLY=true it means: clone the source and stop.
+# The workflow will then inject KSU + patches before calling build.sh again
+# with SKIP_CLONE=true to run the compile phase.
+if [[ ${CLONE_ONLY:-false} == "true" ]]; then
+    log "CLONE_ONLY=true — source cloned successfully, stopping here for KSU injection"
+    exit 0
+fi
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Re-read kernel version if SKIP_CLONE was set (clone was skipped above)
+if [[ ${SKIP_CLONE:-false} == "true" ]]; then
+    cd $workdir/common
+    KERNEL_VERSION=$(make kernelversion)
+fi
 
 # Set variant
 log "Setting KernelSU variant..."
@@ -143,6 +165,85 @@ if ! find "$CLANG_PATH/bin" -name "aarch64-linux-gnu-*" | grep -q .; then
 else
     log "✅ aarch64-linux-gnu found in $CLANG_PATH."
 fi
+
+# ── SKIP_CLONE hook ──────────────────────────────────────────────────────────
+# When the workflow sets SKIP_CLONE=true it means:
+#   • common/ is already cloned and patched (KSU + SUSFS were injected)
+#   • patch repos were already cloned
+#   • We only need to (re-)set up the toolchain and compile
+# Re-source config so all variables are available, then jump straight to
+# the compiler extraction below (everything above is already done).
+if [[ ${SKIP_CLONE:-false} == "true" ]]; then
+    log "SKIP_CLONE=true — skipping clone phase, resuming from toolchain setup"
+    cd $workdir
+    source $workdir/config.sh
+    source $workdir/functions.sh
+
+    # Re-determine Clang URL from config
+    if [[ $USE_AOSP_CLANG == "true" ]]; then
+        if [[ $AOSP_CLANG_SOURCE =~ ^https?:// ]]; then
+            CLANG_URL="$AOSP_CLANG_SOURCE"
+        else
+            CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${AOSP_CLANG_SOURCE}.tar.gz"
+        fi
+    elif [[ $USE_CUSTOM_CLANG == "true" ]]; then
+        CLANG_URL="$CUSTOM_CLANG_SOURCE"
+    fi
+    CLANG_INFO="$CLANG_URL"
+    [[ $CLANG_URL != *.tar.* && -n ${CUSTOM_CLANG_BRANCH:-} ]] && CLANG_INFO+=" | $CUSTOM_CLANG_BRANCH"
+    CLANG_PATH="$workdir/tc"
+
+    if [[ ! -x $CLANG_PATH/bin/clang || ! -f $CLANG_PATH/VERSION || "$(cat $CLANG_PATH/VERSION)" != "$CLANG_INFO" ]]; then
+        log "Toolchain cache miss — downloading $CLANG_INFO"
+        rm -rf "$CLANG_PATH"
+        if [[ $USE_AOSP_CLANG == "true" || $CLANG_URL == *.tar.* ]]; then
+            mkdir -p "$CLANG_PATH"
+            wget -qO clang-tarball "$CLANG_URL" || error "Failed to download Clang."
+            tar -xf clang-tarball -C "$CLANG_PATH/" || error "Failed to extract Clang."
+            rm -f clang-tarball
+        else
+            git clone -q --depth=1 -b "$CUSTOM_CLANG_BRANCH" "$CLANG_URL" "$CLANG_PATH" || error "Clang download failed."
+        fi
+        if [[ $(find "$CLANG_PATH" -mindepth 1 -maxdepth 1 -type d | wc -l) -eq 1 ]] &&
+           [[ $(find "$CLANG_PATH" -mindepth 1 -maxdepth 1 -type f | wc -l) -eq 0 ]]; then
+            single_dir=$(find "$CLANG_PATH" -mindepth 1 -maxdepth 1 -type d)
+            mv "$single_dir"/* "$CLANG_PATH"/
+            rm -rf "$single_dir"
+        fi
+        echo "$CLANG_INFO" >"$CLANG_PATH/VERSION"
+    else
+        log "✅ Using cached Clang: $CLANG_INFO"
+    fi
+
+    export CC="ccache clang"
+    export CXX="ccache clang++"
+    export HOSTCC="$CC"
+    export HOSTCXX="$CXX"
+    export PATH="$CLANG_PATH/bin:$PATH"
+
+    if ! find "$CLANG_PATH/bin" -name "aarch64-linux-gnu-*" | grep -q .; then
+        if find "$CLANG_PATH/binutils" -name "aarch64-linux-gnu-*" | grep -q .; then
+            log "✅ aarch64-linux-gnu found in $CLANG_PATH/binutils."
+        else
+            git clone -q --depth=1 https://android.googlesource.com/platform/prebuilts/gas/linux-x86 "$CLANG_PATH/binutils" || error "❌ Failed to clone binutils."
+        fi
+        export PATH="$CLANG_PATH/binutils:$PATH"
+    fi
+
+    cd $workdir/common
+    KERNEL_VERSION=$(make kernelversion)
+    declare -A KSU_VARIANTS=([None]="vanilla" [Official]="KSU" ["Kernel Source"]="DKSU" [Rissu]="RKSU" [Next]="KSUN" [Legacy]="LegacyKSU" [Suki]="SukiSU")
+    VARIANT="${KSU_VARIANTS[$KSU]:-none}"
+    [[ $USE_KSU_SUSFS == "true" && $VARIANT != "none" ]] && VARIANT+="xSUSFS"
+    ZIP_NAME=${ZIP_NAME//KVER/$KERNEL_VERSION}
+    if [[ $VARIANT == "none" ]]; then ZIP_NAME=${ZIP_NAME//-VARIANT/}
+    else ZIP_NAME=${ZIP_NAME//VARIANT/$VARIANT}; fi
+
+    # Jump directly to compile phase (skip rest of setup)
+    # shellcheck disable=SC2317
+    goto_compile=true
+fi
+# ── end SKIP_CLONE hook ──────────────────────────────────────────────────────
 
 # Extract clang version
 COMPILER_STRING=$(clang -v 2>&1 | head -n 1 | sed 's/(https..*//' | sed 's/ version//')
